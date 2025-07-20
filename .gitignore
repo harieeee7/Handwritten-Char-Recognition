@@ -1,0 +1,5 @@
+# Ignore large data files
+data/
+*.csv
+*.zip
+*.pth
