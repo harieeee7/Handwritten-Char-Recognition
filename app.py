@@ -45,8 +45,8 @@ class CNNModel(nn.Module):
 model = CNNModel().to(device)
 
 try:
-    state_dict = torch.load(MODEL_PATH, map_location=device, weights_only=True)
-    model.load_state_dict(state_dict)
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=device, weights_only=False))
+
     model.eval()
 except Exception as e:
     st.error(f"Failed to load model: {e}")
