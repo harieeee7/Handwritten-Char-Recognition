@@ -4,93 +4,79 @@ import torch.nn as nn
 import torchvision.transforms as transforms
 from PIL import Image, ImageOps
 import numpy as np
+import gdown
 import os
-import urllib.request
 
-# ----------------------------
-# Google Drive Model Download
-# ----------------------------
+# ----------------- Setup -----------------
+st.set_page_config(page_title="Handwritten Character Recognition")
+st.title("✍️ Handwritten Character Recognition")
 
+# Device configuration
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# Model file path and Google Drive download link
 MODEL_PATH = "emnist_cnn.pth"
-GDRIVE_FILE_ID = "1dp5DCteGewgBB28fp5K402HMQmqkyr5G"  # ✅ Your model
-MODEL_URL = f"https://drive.google.com/uc?export=download&id={GDRIVE_FILE_ID}"
+MODEL_DRIVE_URL = "https://drive.google.com/uc?id=1dp5DCteGewgBB28fp5K402HMQmqkyr5G"
 
+# Automatically download the model if not present
 if not os.path.exists(MODEL_PATH):
-    with st.spinner("Downloading model from Google Drive..."):
-        try:
-            urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
-            st.success("Model downloaded successfully!")
-        except Exception as e:
-            st.error(f"Download failed: {e}")
+    st.info("Downloading model...")
+    gdown.download(MODEL_DRIVE_URL, MODEL_PATH, quiet=False)
 
-# ----------------------------
-# CNN Model Definition
-# ----------------------------
-
-class EMNISTModel(nn.Module):
+# ----------------- Model Definition -----------------
+class CNNModel(nn.Module):
     def __init__(self):
-        super(EMNISTModel, self).__init__()
-        self.conv_layer = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-
-            nn.Conv2d(32, 64, kernel_size=3),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-        )
-        self.fc_layer = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(64 * 5 * 5, 128),
-            nn.ReLU(),
-            nn.Linear(128, 26),  # 26 English letters
-        )
+        super(CNNModel, self).__init__()
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.fc1 = nn.Linear(64 * 7 * 7, 128)
+        self.fc2 = nn.Linear(128, 26)  # 26 letters A-Z
 
     def forward(self, x):
-        x = self.conv_layer(x)
-        x = self.fc_layer(x)
+        x = self.pool(torch.relu(self.conv1(x)))
+        x = self.pool(torch.relu(self.conv2(x)))
+        x = x.view(-1, 64 * 7 * 7)
+        x = torch.relu(self.fc1(x))
+        x = self.fc2(x)
         return x
 
-# ----------------------------
-# Load Model
-# ----------------------------
+# Initialize and load model
+model = CNNModel().to(device)
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = EMNISTModel().to(device)
-
-if os.path.exists(MODEL_PATH):
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+try:
+    state_dict = torch.load(MODEL_PATH, map_location=device, weights_only=True)
+    model.load_state_dict(state_dict)
     model.eval()
-else:
-    st.error("Model file not found. Please check Google Drive link.")
+except Exception as e:
+    st.error(f"Failed to load model: {e}")
+    st.stop()
 
-# ----------------------------
-# Streamlit UI
-# ----------------------------
+# ----------------- Helper Functions -----------------
+def preprocess_image(image):
+    image = ImageOps.grayscale(image)
+    image = image.resize((28, 28))
+    img_array = np.array(image)
+    img_array = 255 - img_array  # Invert colors
+    img_array = img_array / 255.0  # Normalize
+    tensor = torch.tensor(img_array, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+    return tensor.to(device)
 
-st.title("✍️ Handwritten Character Recognition")
-st.markdown("Upload a **28x28 grayscale** image of a handwritten **English letter (A-Z)**.")
+def predict_character(image_tensor):
+    with torch.no_grad():
+        outputs = model(image_tensor)
+        _, predicted = torch.max(outputs.data, 1)
+        label = chr(predicted.item() + ord('A'))
+    return label
 
-uploaded_file = st.file_uploader("Upload a handwritten character...", type=["png", "jpg", "jpeg"])
+# ----------------- Streamlit UI -----------------
+uploaded_file = st.file_uploader("Upload an image of a handwritten character", type=["png", "jpg", "jpeg"])
 
 if uploaded_file is not None:
-    image = Image.open(uploaded_file).convert("L")
+    image = Image.open(uploaded_file)
     st.image(image, caption="Uploaded Image", use_column_width=True)
 
-    # Invert and resize
-    image = ImageOps.invert(image)
-    image = image.resize((28, 28))
-
-    # Normalize & convert to tensor
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.5,), (0.5,))
-    ])
-    img_tensor = transform(image).unsqueeze(0).to(device)
-
     if st.button("Predict"):
-        with torch.no_grad():
-            output = model(img_tensor)
-            pred = torch.argmax(output, 1).item()
-            predicted_letter = chr(pred + 65)  # EMNIST starts from 'A' as index 0
-            st.success(f"🧠 Predicted Character: **{predicted_letter}**")
+        input_tensor = preprocess_image(image)
+        prediction = predict_character(input_tensor)
+        st.success(f"Predicted Character: **{prediction}**")
